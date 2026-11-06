@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NBT Evo Trio Collector</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#0d131c;color:#edf2f7}
+*{box-sizing:border-box} body{margin:auto;max-width:740px;padding:32px 20px} h1{margin:0;font-size:clamp(1.8rem,5vw,2.7rem)}
+p{line-height:1.55} a{color:#99d9ff} .lead{color:#b7c8dd;margin-top:.5rem}
+section{padding:21px;border:1px solid #3b4c62;border-radius:12px;background:#152030;margin-top:18px}
+h2{font-size:1.12rem;margin:0 0 14px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}
+label{display:block;font-weight:600} input,select,button{font:inherit} input,select{display:block;width:100%;margin-top:5px;border:1px solid #637a93;border-radius:6px;padding:9px;background:#0d1723;color:#fff}
+button{padding:.6rem .9rem;border-radius:7px;color:#101826;background:#f8ad59;border:0;cursor:pointer;font-weight:700} button.secondary{background:#2c3c50;color:#e9f3ff} button:disabled{opacity:.45;cursor:default}
+.buttons{display:flex;flex-wrap:wrap;gap:9px;margin-top:15px} output{display:block;min-height:3rem;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55;color:#eaf2ff}
+small,.hint{color:#b7c8dd} .badge{font-size:.8rem;background:#283a50;color:#dceafe;padding:4px 8px;border-radius:5px;vertical-align:middle}
+details{margin-top:15px} summary{cursor:pointer;font-weight:600}
+</style>
+<style>
+[hidden]{display:none!important} input[type=checkbox]{display:inline;width:auto;margin-right:8px}
+.check{margin-top:15px;font-weight:400} code{overflow-wrap:anywhere} ul{padding-left:23px}
+</style>
+<h1>NBT Evo Trio Collector</h1>
+<p class="lead">Help check another firmware version for BoostDeck, ShiftDeck and MHD Maps.</p>
+<section>
+<h2>1. Connect to the head unit</h2>
+<p>Park the car, connect the ENET cable and enable temporary SSH for your firmware. <a href="https://ssh.bavarian-aa.uk/" rel="noopener noreferrer" target="_blank">Bavarian SSH Client</a></p>
+<div class="buttons"><button id="find">Find car</button><button id="defaults" class="secondary">Try defaults</button></div>
+<label id="choice" hidden>Detected gateway<select id="cars"></select></label>
+<p class="hint">If discovery only finds a gateway, enter the head unit SSH IP from your unlock tool. Try defaults checks the reference car's SSH address, 169.254.199.119. Its gateway is 169.254.21.3.</p>
+<div class="grid">
+<label>Head unit SSH IP<input id="Head" placeholder="169.254.x.x" autocomplete="off"></label>
+<label>iDrive firmware code (optional)<input id="Version" placeholder="NBTevo_N18032I" autocomplete="off"></label>
+</div>
+<label id="trust" hidden>SSH fingerprint<input id="Fingerprint" readonly></label>
+<label class="check"><input id="libraries" type="checkbox">Include the two framework library files. Select this only if you have permission to share them.</label>
+<p class="hint">The report includes the firmware code, HMI build when available, framework hashes and exported symbols. The collector uses fixed read-only commands and excludes vehicle identifiers and credentials from the ZIP.</p>
+<div class="buttons"><button id="collect">Collect and review</button><button id="quit" class="secondary">Quit</button></div>
+</section>
+<section id="review" hidden>
+<h2>2. Review and download</h2>
+<ul id="contents"></ul>
+<div class="buttons"><button id="download">Download ZIP</button></div>
+<p>Attach the downloaded ZIP to an email in your usual mail app and send it to <a href="mailto:nordicbmwdealer@gmail.com">nordicbmwdealer@gmail.com</a>.</p>
+</section>
+<section><h2>Status</h2><output id="status" role="status" aria-live="polite">Find your car or enter the SSH address.</output></section>
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+let local="", fingerprint="", candidates=[], busy=false, reportName="";
+function controls(){
+  for(const id of ["find","defaults","collect","quit","download"]) $(id).disabled=busy;
+}
+function clearFingerprint(){
+  fingerprint=""; $("trust").hidden=true; $("Fingerprint").value="";
+  $("collect").textContent="Collect and review";
+}
+function clearReview(){
+  reportName=""; $("review").hidden=true; $("contents").replaceChildren();
+}
+$("Head").oninput=()=>{local="";clearFingerprint();};
+function pick(){
+  const item=candidates[Number($("cars").value)];
+  if(!item)return;
+  local=item.Local; $("Head").value=item.Head; clearFingerprint();
+  $("status").textContent=item.Head ? "Found gateway "+item.Gateway+" and head unit "+item.Head+"." :
+    "Found gateway "+item.Gateway+". Enter the head unit SSH IP from your unlock tool.";
+}
+$("cars").onchange=pick;
+$("defaults").onclick=()=>{
+  local=""; $("Head").value="169.254.199.119"; clearFingerprint();
+  $("collect").click();
+};
+async function request(action,data={},zip=false){
+  busy=true;controls();
+  try{
+    const response=await fetch(action,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
+    if(!response.ok)throw new Error("The local collector could not complete that request.");
+    return zip ? await response.blob() : await response.json();
+  }finally{busy=false;controls();}
+}
+$("find").onclick=async()=>{
+  $("status").textContent="Looking for the car over ENET…";
+  try{
+    const result=await request("discover");
+    if(!Array.isArray(result)){$("status").textContent=result.Result;return;}
+    candidates=result;
+    $("cars").replaceChildren(...result.map((r,i)=>new Option(r.Gateway+" via "+r.Local,String(i))));
+    $("choice").hidden=result.length===1;
+    if(result.length===1)pick();
+    else{$("cars").selectedIndex=-1;$("status").textContent="Multiple gateways replied. Select your car.";}
+  }catch(e){$("status").textContent=e.message;}
+};
+$("collect").onclick=async()=>{
+  const Head=$("Head").value.trim();
+  if(!Head){$("status").textContent="Enter the head unit SSH IP.";return;}
+  clearReview();
+  $("status").textContent="Reading firmware and framework information…";
+  try{
+    const result=await request("collect",{Head,Local:local,Fingerprint:fingerprint,
+      Version:$("Version").value.trim(),
+      IncludeLibraries:$("libraries").checked});
+    $("status").textContent=result.Result;
+    if(result.Fingerprint){
+      fingerprint=result.Fingerprint;$("Fingerprint").value=fingerprint;$("trust").hidden=false;
+      $("collect").textContent="Trust this fingerprint and collect";
+    }
+    if(result.Name){
+      reportName=result.Name;
+      for(const name of result.Files){
+        const li=document.createElement("li");li.textContent=name;$("contents").append(li);
+      }
+      $("review").hidden=false;
+      $("review").scrollIntoView({block:"nearest"});
+    }
+  }catch(e){$("status").textContent=e.message;}
+  finally{controls();}
+};
+$("download").onclick=async()=>{
+  try{
+    const blob=await request("download",{},true);
+    const href=URL.createObjectURL(blob);
+    const a=document.createElement("a");a.href=href;a.download=reportName;a.click();
+    setTimeout(()=>URL.revokeObjectURL(href),2000);
+    $("status").textContent="ZIP download started. Email the attachment to nordicbmwdealer@gmail.com.";
+  }catch(e){$("status").textContent=e.message;}
+};
+$("quit").onclick=async()=>{
+  try{await request("quit");}finally{
+    clearReview();$("status").textContent="Collector closed. You can close this tab.";
+    for(const id of ["find","defaults","collect","quit"]) $(id).disabled=true;
+  }
+};
+</script>
